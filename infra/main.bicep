@@ -15,270 +15,312 @@ param resourceGroupName string = ''
 @description('Tags for all resources.')
 param tags object = {}
 
-@description('Value indicating whether the deployment is new or existing.')
-@allowed([
-    'new'
-    'existing'
-])
-param newOrExisting string = 'new'
-
-@description('Name of the Managed Identity. If empty, a unique name will be generated.')
-param managedIdentityName string = ''
-@description('Name of the Storage Account. If empty, a unique name will be generated.')
-param storageAccountName string = ''
-@description('Name of the Key Vault. If empty, a unique name will be generated.')
-param keyVaultName string = ''
-@description('Name of the Log Analytics Workspace. If empty, a unique name will be generated.')
-param logAnalyticsWorkspaceName string = ''
-@description('Name of the Application Insights. If empty, a unique name will be generated.')
-param applicationInsightsName string = ''
-@description('Name of the Container Registry. If empty, a unique name will be generated.')
-param containerRegistryName string = ''
-@description('Name of the AI Workspace. If empty, a unique name will be generated.')
-param aiWorkspaceName string = ''
-@description('Name of the AI Services (Cognitive Services). If empty, a unique name will be generated.')
-param aiServiceName string = ''
-@description('Value indicating whether to include Cognitive Search. Defaults to false.')
-param includeCognitiveSearch bool = false
-@description('Name of the Cognitive Search Service. If empty, a unique name will be generated.')
-param cognitiveSearchName string = ''
+@description('Determines whether to deploy Azure AI Search resources.')
+param includeSearch bool = false
 
 var abbrs = loadJsonContent('./abbreviations.json')
 var roles = loadJsonContent('./roles.json')
 var resourceToken = toLower(uniqueString(subscription().id, workloadName, location))
 
+resource contributor 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  scope: resourceGroup
+  name: roles.general.contributor
+}
+
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-    name: !empty(resourceGroupName) ? resourceGroupName : '${abbrs.resourceGroup}${workloadName}'
+  name: !empty(resourceGroupName) ? resourceGroupName : '${abbrs.managementGovernance.resourceGroup}${workloadName}'
+  location: location
+  tags: union(tags, {})
+}
+
+module managedIdentity './security/managed-identity.bicep' = {
+  name: '${abbrs.security.managedIdentity}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.security.managedIdentity}${resourceToken}'
     location: location
     tags: union(tags, {})
+  }
 }
 
-module managedIdentity './core/managed-identity.bicep' = {
-    name: !empty(managedIdentityName) ? managedIdentityName : '${abbrs.managedIdentity}${resourceToken}'
-    scope: resourceGroup
-    params: {
-        name: !empty(managedIdentityName) ? managedIdentityName : '${abbrs.managedIdentity}${resourceToken}'
-        location: location
-        tags: union(tags, {})
-    }
-}
-
-module resourceGroupContributorAssignment './core/managed-identity-resourcegroup-role.bicep' = {
-    name: '${managedIdentity.name}-resourcegroup-contributor'
-    scope: resourceGroup
-    params: {
-        identityPrincipalId: managedIdentity.outputs.principalId
-        resourceId: resourceGroup.id
-        roleDefinitionId: roles.contributor
-    }
+module resouceGroupRoleAssignment './security/resource-group-role-assignment.bicep' = {
+  name: '${resourceGroup.name}-role-assignment'
+  scope: resourceGroup
+  params: {
+    roleAssignments: [
+      {
+        principalId: managedIdentity.outputs.principalId
+        roleDefinitionId: contributor.id
+        principalType: 'ServicePrincipal'
+      }
+    ]
+  }
 }
 
 resource storageBlobDataContributor 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-    scope: resourceGroup
-    name: roles.storageBlobDataContributor
+  scope: resourceGroup
+  name: roles.storage.storageBlobDataContributor
 }
 
-module storageAccount './core/storage-account.bicep' = {
-    name: !empty(storageAccountName) ? storageAccountName : '${abbrs.storageAccount}${resourceToken}'
-    scope: resourceGroup
-    params: {
-        name: !empty(storageAccountName) ? storageAccountName : '${abbrs.storageAccount}${resourceToken}'
-        location: location
-        tags: union(tags, {})
-        sku: {
-            name: 'Standard_LRS'
-        }
-        roleAssignments: [
-            {
-                principalId: managedIdentity.outputs.principalId
-                roleDefinitionId: storageBlobDataContributor.id
-            }
-        ]
+module storageAccount './storage/storage-account.bicep' = {
+  name: '${abbrs.storage.storageAccount}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.storage.storageAccount}${resourceToken}'
+    location: location
+    tags: union(tags, {})
+    sku: {
+      name: 'Standard_LRS'
     }
-}
-
-resource keyVaultContributor 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-    scope: resourceGroup
-    name: roles.contributor
+    roleAssignments: [
+      {
+        principalId: managedIdentity.outputs.principalId
+        roleDefinitionId: storageBlobDataContributor.id
+        principalType: 'ServicePrincipal'
+      }
+    ]
+  }
 }
 
 resource keyVaultAdministrator 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-    scope: resourceGroup
-    name: roles.keyVaultAdministrator
+  scope: resourceGroup
+  name: roles.security.keyVaultAdministrator
 }
 
-module keyVault './core/key-vault.bicep' = {
-    name: !empty(keyVaultName) ? keyVaultName : '${abbrs.keyVault}${resourceToken}'
-    scope: resourceGroup
-    params: {
-        name: !empty(keyVaultName) ? keyVaultName : '${abbrs.keyVault}${resourceToken}'
-        location: location
-        tags: union(tags, {})
-        roleAssignments: [
-            {
-                principalId: managedIdentity.outputs.principalId
-                roleDefinitionId: keyVaultContributor.id
-            }
-            {
-                principalId: managedIdentity.outputs.principalId
-                roleDefinitionId: keyVaultAdministrator.id
-            }
-        ]
+module keyVault './security/key-vault.bicep' = {
+  name: '${abbrs.security.keyVault}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.security.keyVault}${resourceToken}'
+    location: location
+    tags: union(tags, {})
+    roleAssignments: [
+      {
+        principalId: managedIdentity.outputs.principalId
+        roleDefinitionId: keyVaultAdministrator.id
+        principalType: 'ServicePrincipal'
+      }
+    ]
+  }
+}
+
+module logAnalyticsWorkspace './management_governance/log-analytics-workspace.bicep' = {
+  name: '${abbrs.managementGovernance.logAnalyticsWorkspace}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.managementGovernance.logAnalyticsWorkspace}${resourceToken}'
+    location: location
+    tags: union(tags, {})
+  }
+}
+
+module applicationInsights './management_governance/application-insights.bicep' = {
+  name: '${abbrs.managementGovernance.applicationInsights}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.managementGovernance.applicationInsights}${resourceToken}'
+    location: location
+    tags: union(tags, {})
+    logAnalyticsWorkspaceName: logAnalyticsWorkspace.outputs.name
+  }
+}
+
+resource acrPush 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  scope: resourceGroup
+  name: roles.containers.acrPush
+}
+
+resource acrPull 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  scope: resourceGroup
+  name: roles.containers.acrPull
+}
+
+module containerRegistry './containers/container-registry.bicep' = {
+  name: '${abbrs.containers.containerRegistry}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.containers.containerRegistry}${resourceToken}'
+    location: location
+    tags: union(tags, {})
+    sku: {
+      name: 'Basic'
     }
+    adminUserEnabled: true
+    roleAssignments: [
+      {
+        principalId: managedIdentity.outputs.principalId
+        roleDefinitionId: acrPush.id
+        principalType: 'ServicePrincipal'
+      }
+      {
+        principalId: managedIdentity.outputs.principalId
+        roleDefinitionId: acrPull.id
+        principalType: 'ServicePrincipal'
+      }
+    ]
+  }
 }
 
-module logAnalyticsWorkspace './core/log-analytics-workspace.bicep' = {
-    name: !empty(logAnalyticsWorkspaceName) ? logAnalyticsWorkspaceName : '${abbrs.logAnalyticsWorkspace}${resourceToken}'
-    scope: resourceGroup
-    params: {
-        name: !empty(logAnalyticsWorkspaceName) ? logAnalyticsWorkspaceName : '${abbrs.logAnalyticsWorkspace}${resourceToken}'
-        location: location
-        tags: union(tags, {})
-        applicationInsightsName: !empty(applicationInsightsName) ? applicationInsightsName : '${abbrs.applicationInsights}${resourceToken}'
-    }
+resource cognitiveServicesOpenAIContributor 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  scope: resourceGroup
+  name: roles.ai.cognitiveServicesOpenAIContributor
 }
 
-resource containerRegistryPush 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-    scope: resourceGroup
-    name: roles.acrPush
+resource cognitiveServicesOpenAIUser 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  scope: resourceGroup
+  name: roles.ai.cognitiveServicesOpenAIUser
 }
 
-resource containerRegistryPull 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-    scope: resourceGroup
-    name: roles.acrPull
-}
+var completionsModelDeploymentName = 'gpt-4'
+var embeddingModelDeploymentName = 'text-embedding-ada-002'
 
-module containerRegistry './core/container-registry.bicep' = {
-    name: !empty(containerRegistryName) ? containerRegistryName : '${abbrs.containerRegistry}${resourceToken}'
-    scope: resourceGroup
-    params: {
-        name: !empty(containerRegistryName) ? containerRegistryName : '${abbrs.containerRegistry}${resourceToken}'
-        location: location
-        tags: union(tags, {})
-        sku: {
-            name: 'Basic'
+module aiServices './ai_ml/ai-services.bicep' = {
+  name: '${abbrs.ai.aiServices}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.ai.aiServices}${resourceToken}'
+    location: location
+    tags: union(tags, {})
+    deployments: [
+      {
+        name: completionsModelDeploymentName
+        model: {
+          format: 'OpenAI'
+          name: 'gpt-4'
+          version: 'turbo-2024-04-09'
         }
-        adminUserEnabled: true
-        roleAssignments: [
-            {
-                principalId: managedIdentity.outputs.principalId
-                roleDefinitionId: containerRegistryPush.id
-            }
-            {
-                principalId: managedIdentity.outputs.principalId
-                roleDefinitionId: containerRegistryPull.id
-            }
-        ]
-    }
+        sku: {
+          name: 'Standard'
+          capacity: 20
+        }
+      }
+      {
+        name: embeddingModelDeploymentName
+        model: {
+          format: 'OpenAI'
+          name: 'text-embedding-ada-002'
+          version: '2'
+        }
+        sku: {
+          name: 'Standard'
+          capacity: 20
+        }
+      }
+    ]
+    roleAssignments: [
+      {
+        principalId: managedIdentity.outputs.principalId
+        roleDefinitionId: cognitiveServicesOpenAIContributor.id
+        principalType: 'ServicePrincipal'
+      }
+      {
+        principalId: managedIdentity.outputs.principalId
+        roleDefinitionId: cognitiveServicesOpenAIUser.id
+        principalType: 'ServicePrincipal'
+      }
+    ]
+  }
 }
 
-resource openAIContributor 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-    scope: resourceGroup
-    name: roles.cognitiveServicesOpenAIContributor
+module aiSearch './ai_ml/ai-search.bicep' = if (includeSearch) {
+  name: '${abbrs.ai.aiSearch}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.ai.aiSearch}${resourceToken}'
+    location: location
+    tags: union(tags, {})
+  }
 }
 
-resource openAIUser 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-    scope: resourceGroup
-    name: roles.cognitiveServicesOpenAIUser
+module aiHub './ai_ml/ai-hub.bicep' = {
+  name: '${abbrs.ai.aiHub}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.ai.aiHub}${resourceToken}'
+    location: location
+    tags: union(tags, {})
+    identityId: managedIdentity.outputs.id
+    storageAccountId: storageAccount.outputs.id
+    keyVaultId: keyVault.outputs.id
+    applicationInsightsId: applicationInsights.outputs.id
+    containerRegistryId: containerRegistry.outputs.id
+    aiServicesName: aiServices.outputs.name
+  }
 }
 
-module aiServices './core/ai-services.bicep' = {
-    name: !empty(aiServiceName) ? aiServiceName : '${abbrs.aiServices}${resourceToken}'
-    scope: resourceGroup
-    params: {
-        name: !empty(aiServiceName) ? aiServiceName : '${abbrs.aiServices}${resourceToken}'
-        location: location
-        tags: union(tags, {})
-        deployments: [
-            {
-                name: 'gpt-35-turbo'
-                model: {
-                    format: 'OpenAI'
-                    name: 'gpt-35-turbo'
-                    version: '0301'
-                }
-                sku: {
-                    name: 'Standard'
-                    capacity: 1
-                }
-            }
-            {
-                name: 'text-embedding-ada-002'
-                model: {
-                    format: 'OpenAI'
-                    name: 'text-embedding-ada-002'
-                    version: '2'
-                }
-                sku: {
-                    name: 'Standard'
-                    capacity: 1
-                }
-            }
-        ]
-        roleAssignments: [
-            {
-                principalId: managedIdentity.outputs.principalId
-                roleDefinitionId: openAIContributor.id
-            }
-            {
-                principalId: managedIdentity.outputs.principalId
-                roleDefinitionId: openAIUser.id
-            }
-        ]
-    }
+module aiHubProject './ai_ml/ai-hub-project.bicep' = {
+  name: '${abbrs.ai.aiHubProject}${workloadName}'
+  scope: resourceGroup
+  params: {
+    name: '${abbrs.ai.aiHubProject}${workloadName}'
+    location: location
+    tags: union(tags, {})
+    aiHubName: aiHub.outputs.name
+  }
 }
 
-module aiWorkspace './core/ai-workspace.bicep' = {
-    name: !empty(aiWorkspaceName) ? aiWorkspaceName : '${abbrs.aiWorkspace}${resourceToken}'
-    scope: resourceGroup
-    params: {
-        name: !empty(aiWorkspaceName) ? aiWorkspaceName : '${abbrs.aiWorkspace}${resourceToken}'
-        location: location
-        tags: union(tags, {})
-        identityId: managedIdentity.outputs.id
-        storageAccountId: storageAccount.outputs.id
-        keyVaultId: keyVault.outputs.id
-        applicationInsightsId: logAnalyticsWorkspace.outputs.applicationInsightsId
-        containerRegistryId: containerRegistry.outputs.id
-    }
+output subscriptionInfo object = {
+  id: subscription().subscriptionId
+  tenantId: subscription().tenantId
 }
 
-module aiWorkspaceOpenAIEndpoint './core/ai-workspace-endpoint.bicep' = if (newOrExisting == 'new') {
-    name: '${aiWorkspace.name}-openai'
-    scope: resourceGroup
-    params: {
-        name: 'Azure.OpenAI'
-        endpointResourceId: aiServices.outputs.id
-        workspaceName: aiWorkspace.outputs.name
-    }
+output resourceGroupInfo object = {
+  id: resourceGroup.id
+  name: resourceGroup.name
+  location: resourceGroup.location
+  workloadName: workloadName
 }
 
-module aiWorkspaceContentSafetyEndpoint './core/ai-workspace-endpoint.bicep' = if (newOrExisting == 'new') {
-    name: '${aiWorkspace.name}-contentsafety'
-    scope: resourceGroup
-    params: {
-        name: 'Azure.ContentSafety'
-        endpointResourceId: aiServices.outputs.id
-        workspaceName: aiWorkspace.outputs.name
-    }
+output managedIdentityInfo object = {
+  id: managedIdentity.outputs.id
+  name: managedIdentity.outputs.name
+  principalId: managedIdentity.outputs.principalId
+  clientId: managedIdentity.outputs.clientId
 }
 
-module aiWorkspaceSpeechEndpoint './core/ai-workspace-endpoint.bicep' = if (newOrExisting == 'new') {
-    name: '${aiWorkspace.name}-speech'
-    scope: resourceGroup
-    params: {
-        name: 'Azure.Speech'
-        endpointResourceId: aiServices.outputs.id
-        workspaceName: aiWorkspace.outputs.name
-    }
+output storageAccountInfo object = {
+  id: storageAccount.outputs.id
+  name: storageAccount.outputs.name
 }
 
-module cognitiveSearch './core/cognitive-search.bicep' = if(includeCognitiveSearch) {
-    name: !empty(cognitiveSearchName) ? cognitiveSearchName : '${abbrs.cognitiveSearch}${resourceToken}'
-    scope: resourceGroup
-    params: {
-        name: !empty(cognitiveSearchName) ? cognitiveSearchName : '${abbrs.cognitiveSearch}${resourceToken}'
-        location: location
-        tags: union(tags, {})
-    }
+output keyVaultInfo object = {
+  id: keyVault.outputs.id
+  name: keyVault.outputs.name
+  uri: keyVault.outputs.uri
+}
+
+output logAnalyticsWorkspaceInfo object = {
+  id: logAnalyticsWorkspace.outputs.id
+  name: logAnalyticsWorkspace.outputs.name
+  customerId: logAnalyticsWorkspace.outputs.customerId
+}
+
+output applicationInsightsInfo object = {
+  id: applicationInsights.outputs.id
+  name: applicationInsights.outputs.name
+}
+
+output containerRegistryInfo object = {
+  id: containerRegistry.outputs.id
+  name: containerRegistry.outputs.name
+  loginServer: containerRegistry.outputs.loginServer
+}
+
+output aiServicesInfo object = {
+  id: aiServices.outputs.id
+  name: aiServices.outputs.name
+  endpoint: aiServices.outputs.endpoint
+  host: aiServices.outputs.host
+  completionsModelDeploymentName: completionsModelDeploymentName
+  embeddingModelDeploymentName: embeddingModelDeploymentName
+}
+
+output aiHubInfo object = {
+  id: aiHub.outputs.id
+  name: aiHub.outputs.name
+}
+
+output aiHubProjectInfo object = {
+  id: aiHubProject.outputs.id
+  name: aiHubProject.outputs.name
 }
