@@ -1,5 +1,8 @@
 # Azure AI Workspace Bicep Templates for Azure AI Studio
 
+> [!IMPORTANT]
+> This repo has now been merged into [my Bicep Templates repo](https://github.com/jamesmcroft/bicep-templates/tree/main/quick-starts#azure-ai-studio-hub-environment) which includes identity security enabled by default.
+
 This repository contains the necessary Bicep templates to spin up an Azure AI Workspace in the [new Azure AI Studio](https://azure.microsoft.com/en-gb/products/ai-studio/).
 
 The new Azure AI Workspace brings together all the features of Azure OpenAI Service, Azure Machine Learning, and other Azure Cognitive Services into a single place. The advantages of the Azure AI Workspace include:
